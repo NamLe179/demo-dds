@@ -1,0 +1,30 @@
+module ObjectStateMsg {
+
+    // Trạng thái của 1 object: vị trí, vận tốc, heading, status
+    @final
+    struct ObjectState {
+        long   object_id;   // ID của object [0..1999]
+        float  pos_x;
+        float  pos_y;
+        float  pos_z;
+        float  vel_x;
+        float  vel_y;
+        float  vel_z;
+        float  heading;     // radian
+        octet  status;      // 0=inactive, 1=active, 2=lost
+    };
+
+    // Dùng fixed-size array thay vì sequence để tránh overhead khi serialize:
+    // - Array: CDR bỏ qua length field, layout memory liên tục
+    // - Toàn bộ 2000 objects luôn được gửi 1 lần (1 batch)
+    typedef ObjectState ObjectStateArray[2000];
+
+    // 1 frame chứa toàn bộ 2000 objects
+    @final
+    struct ObjectStateBatch {
+        unsigned long long frame_id;       // Tăng dần mỗi frame
+        long long          timestamp_ns;   // epoch nanoseconds
+        ObjectStateArray   objects;        // 2000 objects cố định
+    };
+
+};

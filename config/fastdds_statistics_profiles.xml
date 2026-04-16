@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <!--
+            Generic profile applied only to Fast DDS statistics DataWriters.
+            It increases history depth to avoid short chart bursts followed by empty gaps
+            when Fast DDS Monitor reads statistics samples under sustained load.
+        -->
+        <data_writer profile_name="GENERIC_STATISTICS_PROFILE">
+            <topic>
+                <historyQos>
+                    <kind>KEEP_LAST</kind>
+                    <depth>256</depth>
+                </historyQos>
+            </topic>
+
+            <propertiesPolicy>
+                <properties>
+                    <!-- Keep pull mode but with deeper history to prevent sample overwrite before monitor reads -->
+                    <property>
+                        <name>fastdds.push_mode</name>
+                        <value>false</value>
+                    </property>
+                </properties>
+            </propertiesPolicy>
+
+            <qos>
+                <durability>
+                    <kind>TRANSIENT_LOCAL</kind>
+                </durability>
+                <reliability>
+                    <kind>RELIABLE</kind>
+                </reliability>
+                <publishMode>
+                    <kind>ASYNCHRONOUS</kind>
+                </publishMode>
+            </qos>
+        </data_writer>
+    </profiles>
+</dds>

@@ -1,0 +1,25 @@
+services:
+  subscriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dds-demo:latest
+    container_name: dds_subscriber
+    environment:
+      DDS_DOMAIN_ID: ${DDS_DOMAIN_ID:-0}
+    command: ["sh", "-lc", "dds_subscriber --domain $${DDS_DOMAIN_ID:-0}"]
+    ipc: host
+    network_mode: host
+    restart: unless-stopped
+
+  publisher:
+    image: dds-demo:latest
+    container_name: dds_publisher
+    depends_on:
+      - subscriber
+    environment:
+      DDS_DOMAIN_ID: ${DDS_DOMAIN_ID:-0}
+    command: ["sh", "-lc", "dds_publisher --domain $${DDS_DOMAIN_ID:-0}"]
+    ipc: host
+    network_mode: host
+    restart: unless-stopped
