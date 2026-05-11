@@ -13,47 +13,21 @@ void ReaderListener::on_data_available(DataReader* reader)
 
     // static: không malloc mỗi lần gọi — thread-safe vì listener của 1 reader chạy tuần tự trong 1 thread
     static ObjectStateMsg::ObjectStateBatch s_batch;
-    static std::atomic<uint64_t> s_cb_count{0};
-    static std::atomic<uint64_t> s_valid_count{0};
-    static std::atomic<uint64_t> s_no_data_count{0};
-    static std::atomic<uint64_t> s_invalid_count{0};
-    static std::atomic<uint64_t> s_error_count{0};
-    static std::atomic<int64_t> s_last_log_ns{0};
     SampleInfo info;
 
     // RETCODE_OK = có dữ liệu; RETCODE_NO_DATA = queue rỗng (bình thường)
-    s_cb_count.fetch_add(1, std::memory_order_relaxed);
+    owner_->stats.cb_count.fetch_add(1, std::memory_order_relaxed);
     ReturnCode_t rc = reader->take_next_sample(&s_batch, &info);
 
     if (rc == RETCODE_OK && info.valid_data) {
-        s_valid_count.fetch_add(1, std::memory_order_relaxed);
+        owner_->stats.valid_count.fetch_add(1, std::memory_order_relaxed);
         owner_->processFrame(s_batch, recv_ns);
     } else if (rc == RETCODE_NO_DATA) {
-        s_no_data_count.fetch_add(1, std::memory_order_relaxed);
+        owner_->stats.no_data_count.fetch_add(1, std::memory_order_relaxed);
     } else if (rc == RETCODE_OK) {
-        s_invalid_count.fetch_add(1, std::memory_order_relaxed);
+        owner_->stats.invalid_count.fetch_add(1, std::memory_order_relaxed);
     } else {
-        s_error_count.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    // Log theo chu kỳ 1s để quan sát queue có nhận dữ liệu hay không 
-    const int64_t last_log_ns = s_last_log_ns.load(std::memory_order_relaxed);
-    if (recv_ns - last_log_ns >= 1'000'000'000LL) {
-        s_last_log_ns.store(recv_ns, std::memory_order_relaxed);
-
-        const uint64_t cb      = s_cb_count.exchange(0, std::memory_order_relaxed);
-        const uint64_t valid   = s_valid_count.exchange(0, std::memory_order_relaxed);
-        const uint64_t nodata  = s_no_data_count.exchange(0, std::memory_order_relaxed);
-        const uint64_t invalid = s_invalid_count.exchange(0, std::memory_order_relaxed);
-        const uint64_t errors  = s_error_count.exchange(0, std::memory_order_relaxed);
-
-        qInfo().noquote()
-            << QString("[Subscriber][Queue] cb=%1 valid=%2 no_data=%3 invalid=%4 errors=%5")
-                   .arg(cb)
-                   .arg(valid)
-                   .arg(nodata)
-                   .arg(invalid)
-                   .arg(errors);
+        owner_->stats.error_count.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -130,16 +104,10 @@ bool SubscriberApp::setupParticipant(int domain_id)
     // Hiển thị monitor cho chart view
     pqos.properties().properties().emplace_back(
         "fastdds.statistics",
-        "HISTORY_LATENCY_TOPIC;PUBLICATION_THROUGHPUT_TOPIC;SUBSCRIPTION_THROUGHPUT_TOPIC"
+        "HISTORY_LATENCY_TOPIC;PUBLICATION_THROUGHPUT_TOPIC;SUBSCRIPTION_THROUGHPUT_TOPIC;DATA_COUNT_TOPIC"
     );
 
-    auto shm = std::make_shared<SharedMemTransportDescriptor>();
-    shm->segment_size(SHM_SEG_BYTES);
-    shm->max_message_size(2 * 1024 * 1024);
-    shm->port_queue_capacity(512);
-    shm->healthy_check_timeout_ms(1000);
-
-    pqos.transport().user_transports.push_back(shm);
+    // UDP Transport (built-in)
     pqos.transport().use_builtin_transports = true;
 
     participant_ = DomainParticipantFactory::get_instance()
@@ -272,6 +240,13 @@ void SubscriberApp::onStatsTimer()
     const int64_t  maxlat   = stats.max_latency_us.load();
     const uint64_t overwrite_est = dropped + rejected;
 
+    // Queue stats (đồng bộ timing)
+    const uint64_t cb      = stats.cb_count.exchange(0);
+    const uint64_t valid   = stats.valid_count.exchange(0);
+    const uint64_t nodata  = stats.no_data_count.exchange(0);
+    const uint64_t invalid = stats.invalid_count.exchange(0);
+    const uint64_t errors  = stats.error_count.exchange(0);
+
     qInfo().noquote()
         << QString("[Subscriber] FPS: %1 | Processed: %2 | OverwriteEst: %3 "
                    "(Gap:%4 + Rejected:%5) | DropEvt: %6 | Objects/s: %7 "
@@ -287,6 +262,14 @@ void SubscriberApp::onStatsTimer()
                .arg(maxlat)
                .arg(frames * NUM_OBJECTS * sizeof(ObjectStateMsg::ObjectState)
                         / 1024.0 / 1024.0, 0, 'f', 2);
+
+    qInfo().noquote()
+        << QString("[Subscriber][Queue] cb=%1 valid=%2 no_data=%3 invalid=%4 errors=%5")
+               .arg(cb)
+               .arg(valid)
+               .arg(nodata)
+               .arg(invalid)
+               .arg(errors);
 }
 
 int64_t SubscriberApp::nowNs()

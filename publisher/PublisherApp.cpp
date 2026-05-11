@@ -93,25 +93,18 @@ bool PublisherApp::setupParticipant(int domain_id)
     // Hiển thị monitor cho chart view
     pqos.properties().properties().emplace_back(
         "fastdds.statistics",
-        "HISTORY_LATENCY_TOPIC;PUBLICATION_THROUGHPUT_TOPIC;SUBSCRIPTION_THROUGHPUT_TOPIC"
+        "HISTORY_LATENCY_TOPIC;PUBLICATION_THROUGHPUT_TOPIC;SUBSCRIPTION_THROUGHPUT_TOPIC;DATA_COUNT_TOPIC"
     );
 
-    // Shared Memory Transport
-    auto shm = std::make_shared<SharedMemTransportDescriptor>();
-    shm->segment_size(SHM_SEG_BYTES);
-    shm->max_message_size(2 * 1024 * 1024); // 2MB >> 72KB/frame
-    shm->port_queue_capacity(512);
-    shm->healthy_check_timeout_ms(1000);
-
-    pqos.transport().user_transports.push_back(shm);
-    pqos.transport().use_builtin_transports = true; // tắt UDP/TCP khi chạy local để chắc chắn dùng shared memory, bật lên đẻ monitor bắt được
+    // UDP Transport (built-in)
+    pqos.transport().use_builtin_transports = true;
 
     // Flow Controller: đang để giới hạn 10MB
     auto fc = std::make_shared<FlowControllerDescriptor>();
     fc->name                = "high_freq_fc";
     fc->scheduler           = FlowControllerSchedulerPolicy::FIFO;
-    fc->max_bytes_per_period = 10 * 1024 * 1024; // 10MB/period
-    fc->period_ms           = static_cast<uint64_t>(PUBLISH_MS); // 33ms
+    fc->max_bytes_per_period = 36 * 1024; // 36KB/period
+    fc->period_ms           = static_cast<uint64_t>(FC_PERIOD_MS); // 10ms
 
     pqos.flow_controllers().push_back(fc);
 

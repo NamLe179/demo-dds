@@ -15,8 +15,6 @@
 #include <fastdds/dds/topic/Topic.hpp>
 #include <fastdds/dds/core/policy/QosPolicies.hpp>
 
-#include <fastdds/rtps/transport/shared_mem/SharedMemTransportDescriptor.hpp>
-
 #include <fastdds/rtps/flowcontrol/FlowControllerDescriptor.hpp>
 
 #include "ObjectState.hpp"
@@ -90,5 +88,6 @@ private:
     static constexpr int    NUM_OBJECTS   = 2000;
     static constexpr int    PUBLISH_HZ    = 30;
     static constexpr int    PUBLISH_MS    = 1000 / PUBLISH_HZ;
+    static constexpr int    FC_PERIOD_MS  = 11;
     static constexpr size_t SHM_SEG_BYTES = 64ULL * 1024 * 1024; // 64MB
 };

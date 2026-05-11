@@ -4,7 +4,7 @@
 #include <QTimer>
 #include <atomic>
 #include <memory>
-\
+
 #include <fastdds/dds/domain/DomainParticipant.hpp>
 #include <fastdds/dds/domain/DomainParticipantFactory.hpp>
 #include <fastdds/dds/subscriber/Subscriber.hpp>
@@ -13,8 +13,6 @@
 #include <fastdds/dds/subscriber/SampleInfo.hpp>
 #include <fastdds/dds/topic/Topic.hpp>
 #include <fastdds/dds/core/policy/QosPolicies.hpp>
-\
-#include <fastdds/rtps/transport/shared_mem/SharedMemTransportDescriptor.hpp>
 
 // Generated
 #include "ObjectState.hpp"
@@ -57,6 +55,13 @@ struct RxStats {
     std::atomic<int64_t>  last_latency_us{0};
     std::atomic<int64_t>  max_latency_us{0};
     std::atomic<uint64_t> last_frame_id{0};
+    
+    // Queue stats (từ on_data_available callback)
+    std::atomic<uint64_t> cb_count{0};
+    std::atomic<uint64_t> valid_count{0};
+    std::atomic<uint64_t> no_data_count{0};
+    std::atomic<uint64_t> invalid_count{0};
+    std::atomic<uint64_t> error_count{0};
 };
 
 class SubscriberApp : public QObject {
