@@ -3,67 +3,69 @@
 #include <QObject>
 #include <QTimer>
 #include <atomic>
+#include <unordered_map>
 #include <memory>
 
-#include <fastdds/dds/domain/DomainParticipant.hpp>
-#include <fastdds/dds/domain/DomainParticipantFactory.hpp>
-#include <fastdds/dds/subscriber/Subscriber.hpp>
-#include <fastdds/dds/subscriber/DataReader.hpp>
-#include <fastdds/dds/subscriber/DataReaderListener.hpp>
-#include <fastdds/dds/subscriber/SampleInfo.hpp>
-#include <fastdds/dds/topic/Topic.hpp>
-#include <fastdds/dds/core/policy/QosPolicies.hpp>
+#include <ndds/ndds_cpp.h>
 
-// Generated
-#include "ObjectState.hpp"
-#include "ObjectStatePubSubTypes.hpp"
-
-namespace fastdds  = eprosima::fastdds::dds;
-namespace rtps = eprosima::fastdds::rtps;
+// Generated type support
+#include "ObjectState.h"
+#include "ObjectStateSupport.h"
 
 class SubscriberApp;
 
-// ReaderListener chạy trong FastDDS internal thread 
-class ReaderListener : public fastdds::DataReaderListener {
+// ReaderListener — chạy trong Connext receive thread
+class ReaderListener : public DDSDataReaderListener {
 public:
     explicit ReaderListener(SubscriberApp* owner) : owner_(owner) {}
 
-    void on_data_available(fastdds::DataReader* reader) override;
+    void on_data_available(DDSDataReader* reader) override;
 
     void on_subscription_matched(
-        fastdds::DataReader*,
-        const fastdds::SubscriptionMatchedStatus& info) override;
+        DDSDataReader* reader,
+        const DDS_SubscriptionMatchedStatus& status) override;
 
     void on_requested_deadline_missed(
-        fastdds::DataReader*,
-        const fastdds::RequestedDeadlineMissedStatus&) override;
+        DDSDataReader* reader,
+        const DDS_RequestedDeadlineMissedStatus& status) override;
 
     void on_sample_rejected(
-        fastdds::DataReader*,
-        const fastdds::SampleRejectedStatus& status) override;
+        DDSDataReader* reader,
+        const DDS_SampleRejectedStatus& status) override;
+
+    void on_liveliness_changed(
+        DDSDataReader* reader,
+        const DDS_LivelinessChangedStatus& status) override;
 
 private:
     SubscriberApp* owner_;
 };
 
+// Stats — tất cả atomic 
 struct RxStats {
+    // Frame-level stats (1 frame = 2000 samples với cùng frame_id)
     std::atomic<uint64_t> frames_received{0};
     std::atomic<uint64_t> frames_dropped{0};
     std::atomic<uint64_t> drop_events{0};
+
+    // Sample-level stats
+    std::atomic<uint64_t> samples_received{0};
     std::atomic<uint64_t> samples_rejected{0};
-    std::atomic<uint64_t> objects_processed{0};
+
+    // Latency (us)
     std::atomic<int64_t>  last_latency_us{0};
     std::atomic<int64_t>  max_latency_us{0};
+
+    // Tracking
     std::atomic<uint64_t> last_frame_id{0};
-    
-    // Queue stats (từ on_data_available callback)
+
+    // Callback stats
     std::atomic<uint64_t> cb_count{0};
-    std::atomic<uint64_t> valid_count{0};
+    std::atomic<uint64_t> take_count{0};   // số lần take() trả RETCODE_OK
     std::atomic<uint64_t> no_data_count{0};
-    std::atomic<uint64_t> invalid_count{0};
-    std::atomic<uint64_t> error_count{0};
 };
 
+// SubscriberApp
 class SubscriberApp : public QObject {
     Q_OBJECT
 
@@ -74,11 +76,8 @@ public:
     bool init(int domain_id = 0);
     void start();
 
-    // Gọi từ ReaderListener (FastDDS thread) 
-    void processFrame(const ObjectStateMsg::ObjectStateBatch& batch,
-                      int64_t recv_ns);
-
-    // Public để ReaderListener dùng
+    // Gọi từ ReaderListener (Connext thread)
+    void processDataAvailable(DDSDataReader* reader);
     static int64_t nowNs();
 
     RxStats stats;
@@ -92,17 +91,20 @@ private:
     bool setupSubscriber();
     bool setupReader();
 
-    fastdds::DomainParticipant* participant_{nullptr};
-    fastdds::Subscriber*         subscriber_{nullptr};
-    fastdds::Topic*              topic_{nullptr};
-    fastdds::DataReader*         reader_{nullptr};
-    fastdds::TypeSupport          type_support_;
+    // DDS entities 
+    DDSDomainParticipant*                  participant_{nullptr};
+    DDSSubscriber*                         subscriber_{nullptr};
+    DDSTopic*                              topic_{nullptr};
+    ObjectStateMsg::ObjectStateDataReader* reader_{nullptr};
 
     ReaderListener listener_;
     QTimer*        stats_timer_{nullptr};
+
     std::atomic<int64_t> last_gap_log_ns_{0};
 
-    static constexpr int    NUM_OBJECTS   = 2000;
-    static constexpr size_t SHM_SEG_BYTES = 64ULL * 1024 * 1024;
+    static constexpr int     NUM_OBJECTS         = 2000;
     static constexpr int64_t GAP_LOG_INTERVAL_NS = 250'000'000; // 250ms
+
+    // Số sample tối đa lấy mỗi lần take() — lấy đủ 1 batch (2000) + buffer nhỏ
+    static constexpr int MAX_TAKE_SAMPLES = 4096;
 };

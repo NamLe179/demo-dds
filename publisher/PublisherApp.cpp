@@ -3,46 +3,17 @@
 #include <chrono>
 #include <cmath>
 
-using namespace eprosima::fastdds::dds;
-using namespace eprosima::fastdds::rtps;
-
-namespace {
-
-const char* returnCodeToString(ReturnCode_t rc)
-{
-    if (rc == RETCODE_OK) return "RETCODE_OK";
-    if (rc == RETCODE_ERROR) return "RETCODE_ERROR";
-    if (rc == RETCODE_UNSUPPORTED) return "RETCODE_UNSUPPORTED";
-    if (rc == RETCODE_BAD_PARAMETER) return "RETCODE_BAD_PARAMETER";
-    if (rc == RETCODE_PRECONDITION_NOT_MET) return "RETCODE_PRECONDITION_NOT_MET";
-    if (rc == RETCODE_OUT_OF_RESOURCES) return "RETCODE_OUT_OF_RESOURCES";
-    if (rc == RETCODE_NOT_ENABLED) return "RETCODE_NOT_ENABLED";
-    if (rc == RETCODE_IMMUTABLE_POLICY) return "RETCODE_IMMUTABLE_POLICY";
-    if (rc == RETCODE_INCONSISTENT_POLICY) return "RETCODE_INCONSISTENT_POLICY";
-    if (rc == RETCODE_ALREADY_DELETED) return "RETCODE_ALREADY_DELETED";
-    if (rc == RETCODE_TIMEOUT) return "RETCODE_TIMEOUT";
-    if (rc == RETCODE_NO_DATA) return "RETCODE_NO_DATA";
-    if (rc == RETCODE_ILLEGAL_OPERATION) return "RETCODE_ILLEGAL_OPERATION";
-    if (rc == RETCODE_NOT_ALLOWED_BY_SECURITY) return "RETCODE_NOT_ALLOWED_BY_SECURITY";
-    return "RETCODE_UNKNOWN";
-}
-
-}
-
-void WriterListener::on_publication_matched(
-    DataWriter*,
-    const PublicationMatchedStatus& info)
-{
-    matched.fetch_add(info.current_count_change, std::memory_order_relaxed);
-    qInfo() << "[Publisher] Matched subscribers:" << matched.load();
-}
-
-void WriterListener::on_offered_deadline_missed(
-    DataWriter*,
-    const OfferedDeadlineMissedStatus&)
-{
-    qWarning() << "[Publisher] Deadline missed — writer chậm!";
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// PublisherApp.cpp  —  RTI Connext DDS publisher
+//
+// Luồng publish mỗi frame:
+//   1. simulateObjects() cập nhật 2000 vị trí
+//   2. for i=0..1999: writer_->write(sample_)
+//      - RTI Connext DataWriter nhận từng sample vào internal batch buffer
+//      - Khi buffer đạt max_samples=2000 (hoặc max_data_bytes), transport
+//        tự động flush → gửi 1 hoặc vài UDP packet chứa toàn bộ batch
+//   3. Không flush() thủ công — Connext tự quản lý theo QoS
+// ─────────────────────────────────────────────────────────────────────────────
 
 PublisherApp::PublisherApp(QObject* parent)
     : QObject(parent)
@@ -52,12 +23,17 @@ PublisherApp::~PublisherApp()
 {
     stop();
 
-    // Cleanup theo thứ tự ngược
-    if (publisher_ && writer_)   publisher_->delete_datawriter(writer_);
-    if (participant_ && publisher_) participant_->delete_publisher(publisher_);
-    if (participant_ && topic_)  participant_->delete_topic(topic_);
-    if (participant_)
-        DomainParticipantFactory::get_instance()->delete_participant(participant_);
+    // Cleanup theo thứ tự ngược với tạo
+    if (participant_) {
+        // delete_contained_entities() xóa topic, publisher, writer
+        participant_->delete_contained_entities();
+        DDSDomainParticipantFactory::get_instance()
+            ->delete_participant(participant_);
+        participant_ = nullptr;
+    }
+
+    // Finalize factory (giải phóng thread nội bộ)
+    DDSDomainParticipantFactory::finalize_instance();
 }
 
 bool PublisherApp::init(int domain_id)
@@ -67,7 +43,7 @@ bool PublisherApp::init(int domain_id)
     if (!setupPublisher())           return false;
     if (!setupWriter())              return false;
 
-    preAllocateData();
+    preAllocateSample();
 
     publish_timer_ = new QTimer(this);
     publish_timer_->setTimerType(Qt::PreciseTimer);
@@ -81,35 +57,27 @@ bool PublisherApp::init(int domain_id)
     perf_clock_.start();
     qInfo() << "[Publisher] Ready. Domain:" << domain_id
             << "| Objects:" << NUM_OBJECTS
-            << "| Target:" << PUBLISH_HZ << "Hz";
+            << "| Target:" << PUBLISH_HZ << "Hz"
+            << "| Batch max_samples:" << BATCH_MAX_SAMPLES;
     return true;
 }
 
 bool PublisherApp::setupParticipant(int domain_id)
 {
-    DomainParticipantQos pqos;
-    pqos.name("HighFreqPublisher");
+    // Participant QoS — lấy default rồi chỉnh transport
+    DDS_DomainParticipantQos pqos;
+    DDSDomainParticipantFactory::get_instance()
+        ->get_default_participant_qos(pqos);
 
-    // Hiển thị monitor cho chart view
-    pqos.properties().properties().emplace_back(
-        "fastdds.statistics",
-        "HISTORY_LATENCY_TOPIC;PUBLICATION_THROUGHPUT_TOPIC;SUBSCRIPTION_THROUGHPUT_TOPIC;DATA_COUNT_TOPIC"
-    );
+    pqos.participant_name.name = DDS_String_dup("HighFreqPublisher");
 
-    // UDP Transport (built-in)
-    pqos.transport().use_builtin_transports = true;
+    participant_ = DDSDomainParticipantFactory::get_instance()
+                       ->create_participant(
+                           domain_id,
+                           pqos,
+                           nullptr, // listener
+                           DDS_STATUS_MASK_NONE);
 
-    // Flow Controller: đang để giới hạn 10MB
-    auto fc = std::make_shared<FlowControllerDescriptor>();
-    fc->name                = "high_freq_fc";
-    fc->scheduler           = FlowControllerSchedulerPolicy::FIFO;
-    fc->max_bytes_per_period = 36 * 1024; // 36KB/period
-    fc->period_ms           = static_cast<uint64_t>(FC_PERIOD_MS); // 10ms
-
-    pqos.flow_controllers().push_back(fc);
-
-    participant_ = DomainParticipantFactory::get_instance()
-                       ->create_participant(domain_id, pqos);
     if (!participant_) {
         qCritical() << "[Publisher] Không tạo được DomainParticipant";
         return false;
@@ -119,16 +87,23 @@ bool PublisherApp::setupParticipant(int domain_id)
 
 bool PublisherApp::setupTopic()
 {
-    type_support_ = TypeSupport(new ObjectStateMsg::ObjectStateBatchPubSubType());
-    if (type_support_.register_type(participant_) != RETCODE_OK) {
-        qCritical() << "[Publisher] Không đăng ký được type";
+    // Đăng ký type — rtiddsgen sinh ObjectStateTypeSupport
+    DDS_ReturnCode_t rc =
+        ObjectStateMsg::ObjectStateTypeSupport::register_type(
+            participant_,
+            ObjectStateMsg::ObjectStateTypeSupport::get_type_name());
+
+    if (rc != DDS_RETCODE_OK) {
+        qCritical() << "[Publisher] Không đăng ký được type. rc=" << rc;
         return false;
     }
 
     topic_ = participant_->create_topic(
-        "ObjectStateBatch",
-        type_support_.get_type_name(),
-        TOPIC_QOS_DEFAULT);
+        "ObjectStateTopic",
+        ObjectStateMsg::ObjectStateTypeSupport::get_type_name(),
+        DDS_TOPIC_QOS_DEFAULT,
+        nullptr,
+        DDS_STATUS_MASK_NONE);
 
     if (!topic_) {
         qCritical() << "[Publisher] Không tạo được Topic";
@@ -139,7 +114,11 @@ bool PublisherApp::setupTopic()
 
 bool PublisherApp::setupPublisher()
 {
-    publisher_ = participant_->create_publisher(PUBLISHER_QOS_DEFAULT);
+    publisher_ = participant_->create_publisher(
+        DDS_PUBLISHER_QOS_DEFAULT,
+        nullptr,
+        DDS_STATUS_MASK_NONE);
+
     if (!publisher_) {
         qCritical() << "[Publisher] Không tạo được Publisher";
         return false;
@@ -149,56 +128,86 @@ bool PublisherApp::setupPublisher()
 
 bool PublisherApp::setupWriter()
 {
-    DataWriterQos wqos;
+    // DataWriter QoS 
+    DDS_DataWriterQos wqos;
+    publisher_->get_default_datawriter_qos(wqos);
 
-    // BEST_EFFORT: không retransmit, không ACK
-    wqos.reliability().kind = BEST_EFFORT_RELIABILITY_QOS;
+    // BEST_EFFORT
+    wqos.reliability.kind = DDS_BEST_EFFORT_RELIABILITY_QOS;
 
-    // KEEP_LAST depth=1: writer chỉ giữ frame mới nhất
-    wqos.history().kind  = KEEP_LAST_HISTORY_QOS;
-    wqos.history().depth = 1;
+    // KEEP_LAST depth=1
+    wqos.history.kind  = DDS_KEEP_LAST_HISTORY_QOS;
+    wqos.history.depth = 1;
 
-    wqos.resource_limits().max_samples              = 1;
-    wqos.resource_limits().max_instances            = 1;
-    wqos.resource_limits().max_samples_per_instance = 1;
+    // Resource limits — khớp với history depth
+    // object_id là @key cần 2000 instances. Writer chỉ giữ KEEP_LAST(1) mỗi instance
+    // max_samples = max_instances × max_samples_per_instance = 2000 × 1.
+    wqos.resource_limits.max_samples              = NUM_OBJECTS;
+    wqos.resource_limits.max_instances            = NUM_OBJECTS;
+    wqos.resource_limits.max_samples_per_instance = 1;
 
-    // ASYNC: write() return ngay, không block QTimer thread
-    wqos.publish_mode().kind                 = ASYNCHRONOUS_PUBLISH_MODE;
-    wqos.publish_mode().flow_controller_name = "high_freq_fc";
+    // BATCH QoS
+    wqos.batch.enable         = DDS_BOOLEAN_TRUE;
+    wqos.batch.max_data_bytes = BATCH_MAX_BYTES;        // 128 KB 
+    wqos.batch.max_samples    = BATCH_MAX_SAMPLES;      // 2000 samples 
+    wqos.batch.max_flush_delay.sec     = 0;
+    wqos.batch.max_flush_delay.nanosec = 35 * 1000000u; // 35 ms
 
-    // Deadline cảnh báo nếu không publish kịp 30Hz (+5ms margin)
-    wqos.deadline().period = eprosima::fastdds::dds::Duration_t{
-        0, static_cast<uint32_t>((PUBLISH_MS + 5) * 1'000'000u)
-    };
+    wqos.publish_mode.kind = DDS_ASYNCHRONOUS_PUBLISH_MODE_QOS;
 
-    writer_ = publisher_->create_datawriter(topic_, wqos, &writer_listener_);
-    if (!writer_) {
+    // Flow controller
+    DDS_FlowControllerProperty_t fc_prop;
+    participant_->get_default_flowcontroller_property((fc_prop));
+
+    fc_prop.scheduling_policy = DDS_EDF_FLOW_CONTROLLER_SCHED_POLICY;
+
+    fc_prop.token_bucket.max_tokens = 200 * 1024; // 200 KB
+    fc_prop.token_bucket.tokens_added_per_period = 70 * 1024; //70 KB thêm vào mỗi chu kỳ
+    fc_prop.token_bucket.period.sec = 0;
+    fc_prop.token_bucket.period.nanosec = 11 * 1000000; // Chu kỳ fill 11 ms
+
+    participant_->create_flowcontroller("HighFreqFlowController", fc_prop);
+
+    wqos.publish_mode.flow_controller_name = DDS_String_dup("HighFreqFlowController");
+
+    //  Deadline 
+    // BATCH + ASYNC, deadline được tính sau khi batch được flush
+    wqos.deadline.period.sec     = 0;
+    wqos.deadline.period.nanosec = (PUBLISH_MS + 10) * 1000000u; // 43ms
+
+    DDSDataWriter* base_writer = publisher_->create_datawriter(
+        topic_,
+        wqos,
+        nullptr, // listener — xử lý qua polling trong stats
+        DDS_STATUS_MASK_NONE);
+
+    if (!base_writer) {
         qCritical() << "[Publisher] Không tạo được DataWriter";
         return false;
     }
 
-    qInfo() << "[Publisher] DataWriter: BEST_EFFORT | KEEP_LAST(1) | ASYNC";
+    // Narrow xuống typed writer
+    writer_ = ObjectStateMsg::ObjectStateDataWriter::narrow(base_writer);
+    if (!writer_) {
+        qCritical() << "[Publisher] narrow() thất bại";
+        return false;
+    }
+
+    qInfo() << "[Publisher] DataWriter: BEST_EFFORT | KEEP_LAST(1) | ASYNC"
+            << "| BATCH max_samples=" << BATCH_MAX_SAMPLES
+            << "max_data_bytes=" << BATCH_MAX_BYTES << "B"
+            << "flush_delay=35ms";
     return true;
 }
 
-// Pre-allocate: gọi 1 lần duy nhất — sau đó chỉ ghi đè giá trị
-// Fixed array[2000] trong IDL: không cần resize, vùng nhớ đã cố định
-void PublisherApp::preAllocateData()
+// Pre-allocate sample struct — gọi 1 lần duy nhất.
+// Hot path chỉ ghi đè field values, không malloc.
+void PublisherApp::preAllocateSample()
 {
-    batch_.frame_id(0);
-    batch_.timestamp_ns(0);
-
-    for (int i = 0; i < NUM_OBJECTS; ++i) {
-        auto& obj = batch_.objects()[i];
-        obj.object_id(i);
-        obj.pos_x(0.0f);  obj.pos_y(0.0f);  obj.pos_z(0.0f);
-        obj.vel_x(0.0f);  obj.vel_y(0.0f);  obj.vel_z(0.0f);
-        obj.heading(0.0f);
-        obj.status(1);
-    }
-
-    qInfo() << "[Publisher] Pre-allocated" << NUM_OBJECTS
-            << "objects — hot path không có malloc";
+    // Zero-init tất cả fields
+    sample_ = ObjectStateMsg::ObjectState{};
+    sample_.status = 1;
+    qInfo() << "[Publisher] Pre-allocated ObjectState sample — hot path malloc-free";
 }
 
 void PublisherApp::start()
@@ -214,84 +223,85 @@ void PublisherApp::stop()
     if (stats_timer_)   stats_timer_->stop();
 }
 
-// Hot path — gọi mỗi 33ms — KHÔNG được có malloc/free
+// ─────────────────────────────────────────────────────────────────────────────
+// Hot path — gọi mỗi 33ms bởi Qt timer
+// ─────────────────────────────────────────────────────────────────────────────
 void PublisherApp::onTimerTick()
 {
-    const qint64 now_ns = nowNs();
+    const qint64  now_ns  = nowNs();
+    frame_id_.fetch_add(1, std::memory_order_relaxed);
 
-    batch_.frame_id(frame_id_.fetch_add(1, std::memory_order_relaxed));
-    batch_.timestamp_ns(now_ns);
-
+    const auto t0 = perf_clock_.nsecsElapsed();
+    // Cập nhật vị trí tất cả objects
     simulateObjects(now_ns);
 
-    // write() với ASYNC mode: return ~0.4µs, không block
-    const auto t0 = perf_clock_.nsecsElapsed();
-    const ReturnCode_t rc = writer_->write(&batch_);
     const auto t1 = perf_clock_.nsecsElapsed();
+    last_frame_write_us_ = (t1 - t0) / 1000.0;
 
-    last_write_us_ = (t1 - t0) / 1000.0;
-
-    if (rc == RETCODE_OK) {
-        frames_sent_.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    write_failures_.fetch_add(1, std::memory_order_relaxed);
-
-    // FastDDS không expose trực tiếp bucket hết token
-    // writer trả timeout/out-of-resources trong async mode => có thể là dấu hiệu backpressure.
-    if (rc == RETCODE_OUT_OF_RESOURCES || rc == RETCODE_TIMEOUT) {
-        const auto q = possible_queue_events_.fetch_add(1, std::memory_order_relaxed) + 1;
-        qWarning().noquote()
-            << QString("[Publisher] Backpressure suspected (flow-control queue/history đầy). rc=%1 | queueEvents=%2")
-                   .arg(returnCodeToString(rc))
-                   .arg(q);
-    } else {
-        qWarning().noquote()
-            << QString("[Publisher] write() failed. rc=%1")
-                   .arg(returnCodeToString(rc));
-    }
+    frames_sent_.fetch_add(1, std::memory_order_relaxed);
 }
 
+// simulateObjects — cập nhật sample_ cho từng object rồi lập tức gọi write().
 void PublisherApp::simulateObjects(qint64 now_ns)
 {
-    const float t = static_cast<float>(now_ns) * 1e-9f;
+    const float   t   = static_cast<float>(now_ns) * 1e-9f;
+    const uint64_t fid = frame_id_.load(std::memory_order_relaxed);
 
     for (int i = 0; i < NUM_OBJECTS; ++i) {
-        auto& obj = batch_.objects()[i];
-
         const float phase  = static_cast<float>(i) * 0.1f;
         const float radius = 10.0f + (i % 100) * 0.5f;
         const float omega  = 0.5f  + (i % 10) * 0.05f;
         const float angle  = omega * t + phase;
 
-        obj.pos_x(radius * std::cos(angle));
-        obj.pos_y(radius * std::sin(angle));
-        obj.pos_z(static_cast<float>(i % 10) * 0.1f);
-        obj.vel_x(-radius * omega * std::sin(angle));
-        obj.vel_y( radius * omega * std::cos(angle));
-        obj.vel_z(0.0f);
-        obj.heading(angle + static_cast<float>(M_PI_2));
-        obj.status(1);
+        sample_.frame_id     = fid;
+        sample_.timestamp_ns = now_ns;
+        sample_.object_id    = i;
+        sample_.pos_x        = radius * std::cos(angle);
+        sample_.pos_y        = radius * std::sin(angle);
+        sample_.pos_z        = static_cast<float>(i % 10) * 0.1f;
+        sample_.vel_x        = -radius * omega * std::sin(angle);
+        sample_.vel_y        =  radius * omega * std::cos(angle);
+        sample_.vel_z        = 0.0f;
+        sample_.heading      = angle + static_cast<float>(M_PI_2);
+        sample_.status       = 1;
+
+        // write() ngay sau khi cập nhật object i — không đợi hết vòng lặp
+        // Connext sẽ copy data vào batch buffer nội bộ.
+        const DDS_ReturnCode_t rc = writer_->write(sample_, DDS_HANDLE_NIL);
+        if (rc != DDS_RETCODE_OK) {
+            write_failures_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 
 void PublisherApp::onStatsTimer()
 {
-    const int sent    = frames_sent_.exchange(0, std::memory_order_relaxed);
-    const int matched = writer_listener_.matched.load();
-    const uint64_t failed = write_failures_.exchange(0, std::memory_order_relaxed);
-    const uint64_t queue_events = possible_queue_events_.exchange(0, std::memory_order_relaxed);
+    const uint64_t sent    = frames_sent_.exchange(0, std::memory_order_relaxed);
+    const uint64_t failed  = write_failures_.exchange(0, std::memory_order_relaxed);
 
-    qInfo().noquote()
-        << QString("[Publisher] FPS: %1 | write(): %2 µs | Subs: %3 | writeFail: %4 | queueEvt: %5 | ~%6 MB/s")
-               .arg(sent)
-               .arg(last_write_us_, 0, 'f', 2)
-               .arg(matched)
-               .arg(failed)
-               .arg(queue_events)
-               .arg(sent * NUM_OBJECTS * sizeof(ObjectStateMsg::ObjectState)
-                        / 1024.0 / 1024.0, 0, 'f', 2);
+    // Throughput: samples/s và MB/s
+    const double samples_per_s = static_cast<double>(sent) * NUM_OBJECTS;
+    const double mbps = samples_per_s * sizeof(ObjectStateMsg::ObjectState)
+                        / 1024.0 / 1024.0;
+
+    // Publication matched status
+    DDS_PublicationMatchedStatus pub_status;
+    if (writer_->get_publication_matched_status(pub_status) == DDS_RETCODE_OK) {
+        qInfo().noquote()
+            << QString("[Publisher] FPS: %1 | write(): %2 µs/frame | Subs: %3 | writeFail: %4 | ~%5 MB/s")
+                   .arg(sent)
+                   .arg(last_frame_write_us_, 0, 'f', 2)
+                   .arg(pub_status.current_count)
+                   .arg(failed)
+                   .arg(mbps, 0, 'f', 2);
+    } else {
+        qInfo().noquote()
+            << QString("[Publisher] FPS: %1 | write(): %2 µs/frame | writeFail: %3 | ~%4 MB/s")
+                   .arg(sent)
+                   .arg(last_frame_write_us_, 0, 'f', 2)
+                   .arg(failed)
+                   .arg(mbps, 0, 'f', 2);
+    }
 }
 
 qint64 PublisherApp::nowNs()
