@@ -249,7 +249,7 @@ void SubscriberApp::processDataAvailable(DDSDataReader* base_reader)
     stats.samples_received.fetch_add(
         static_cast<uint64_t>(n), std::memory_order_relaxed);
 
-    // Tính latency từ sample đầu tiên valid trong batch
+    // Tính latency từ tất cả sample valid trong batch
     // (tất cả sample trong 1 frame có cùng timestamp_ns)
     bool latency_updated = false;
 
@@ -263,12 +263,16 @@ void SubscriberApp::processDataAvailable(DDSDataReader* base_reader)
 
         const ObjectStateMsg::ObjectState& obj = data_seq[i];
 
-        // Latency — chỉ tính 1 lần/callback
+        // Latency — tích lũy từ tất cả valid samples
+        const int64_t latency_us = (recv_ns - obj.timestamp_ns) / 1000;
+        stats.last_latency_us.store(latency_us, std::memory_order_relaxed);
+        stats.total_latency_us.fetch_add(static_cast<uint64_t>(latency_us), std::memory_order_relaxed);
+        stats.latency_sample_count.fetch_add(1, std::memory_order_relaxed);
+
+        if (latency_us > stats.max_latency_us.load(std::memory_order_relaxed))
+            stats.max_latency_us.store(latency_us, std::memory_order_relaxed);
+
         if (!latency_updated) {
-            const int64_t latency_us = (recv_ns - obj.timestamp_ns) / 1000;
-            stats.last_latency_us.store(latency_us, std::memory_order_relaxed);
-            if (latency_us > stats.max_latency_us.load(std::memory_order_relaxed))
-                stats.max_latency_us.store(latency_us, std::memory_order_relaxed);
             current_frame_id = obj.frame_id;
             latency_updated = true;
         }
@@ -317,14 +321,13 @@ void SubscriberApp::onStatsTimer()
 {
     const uint64_t frames   = stats.frames_received.exchange(0);
     const uint64_t dropped  = stats.frames_dropped.exchange(0);
-    const uint64_t drop_evt = stats.drop_events.exchange(0);
-    const uint64_t rejected = stats.samples_rejected.exchange(0);
     const uint64_t samples  = stats.samples_received.exchange(0);
-    const int64_t  lat      = stats.last_latency_us.load();
+    const uint64_t total_lat = stats.total_latency_us.exchange(0);
+    const uint64_t lat_count = stats.latency_sample_count.exchange(0);
     const int64_t  maxlat   = stats.max_latency_us.load();
-    const uint64_t cb       = stats.cb_count.exchange(0);
-    const uint64_t takes    = stats.take_count.exchange(0);
-    const uint64_t nodata   = stats.no_data_count.exchange(0);
+
+    // Tính trung bình latency
+    const double avg_lat = lat_count > 0 ? static_cast<double>(total_lat) / lat_count : 0.0;
 
     // Throughput
     const double mbps = static_cast<double>(samples)
@@ -333,21 +336,15 @@ void SubscriberApp::onStatsTimer()
 
     qInfo().noquote()
         << QString("[Subscriber] FPS: %1 | Samples: %2 | Dropped frames: %3 "
-                   "(evt:%4) | Rejected: %5 | Latency: %6µs | MaxLat: %7µs | ~%8 MB/s")
+                   "| Latency: %4µs (avg) | MaxLat: %5µs | ~%6 MB/s")
                .arg(frames)
                .arg(samples)
                .arg(dropped)
-               .arg(drop_evt)
-               .arg(rejected)
-               .arg(lat)
+               .arg(avg_lat, 0, 'f', 2)
                .arg(maxlat)
                .arg(mbps, 0, 'f', 2);
 
-    qInfo().noquote()
-        << QString("[Subscriber][take] cb=%1 takes=%2 no_data=%3")
-               .arg(cb)
-               .arg(takes)
-               .arg(nodata);
+
 }
 
 int64_t SubscriberApp::nowNs()

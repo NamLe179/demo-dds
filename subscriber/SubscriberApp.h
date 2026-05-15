@@ -55,6 +55,8 @@ struct RxStats {
     // Latency (us)
     std::atomic<int64_t>  last_latency_us{0};
     std::atomic<int64_t>  max_latency_us{0};
+    std::atomic<uint64_t> total_latency_us{0};       // Tích lũy latency
+    std::atomic<uint64_t> latency_sample_count{0};   // Số samples đo latency
 
     // Tracking
     std::atomic<uint64_t> last_frame_id{0};

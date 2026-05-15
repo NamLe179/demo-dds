@@ -237,6 +237,7 @@ void PublisherApp::onTimerTick()
 
     const auto t1 = perf_clock_.nsecsElapsed();
     last_frame_write_us_ = (t1 - t0) / 1000.0;
+    total_write_time_us_.fetch_add(static_cast<uint64_t>(last_frame_write_us_), std::memory_order_relaxed);
 
     frames_sent_.fetch_add(1, std::memory_order_relaxed);
 }
@@ -276,8 +277,12 @@ void PublisherApp::simulateObjects(qint64 now_ns)
 
 void PublisherApp::onStatsTimer()
 {
-    const uint64_t sent    = frames_sent_.exchange(0, std::memory_order_relaxed);
-    const uint64_t failed  = write_failures_.exchange(0, std::memory_order_relaxed);
+    const uint64_t sent         = frames_sent_.exchange(0, std::memory_order_relaxed);
+    const uint64_t failed       = write_failures_.exchange(0, std::memory_order_relaxed);
+    const uint64_t total_write_us = total_write_time_us_.exchange(0, std::memory_order_relaxed);
+
+    // Tính trung bình write time
+    const double avg_write_us = sent > 0 ? static_cast<double>(total_write_us) / sent : 0.0;
 
     // Throughput: samples/s và MB/s
     const double samples_per_s = static_cast<double>(sent) * NUM_OBJECTS;
@@ -288,17 +293,17 @@ void PublisherApp::onStatsTimer()
     DDS_PublicationMatchedStatus pub_status;
     if (writer_->get_publication_matched_status(pub_status) == DDS_RETCODE_OK) {
         qInfo().noquote()
-            << QString("[Publisher] FPS: %1 | write(): %2 µs/frame | Subs: %3 | writeFail: %4 | ~%5 MB/s")
+            << QString("[Publisher] FPS: %1 | write(): %2 µs/frame (avg) | Subs: %3 | writeFail: %4 | ~%5 MB/s")
                    .arg(sent)
-                   .arg(last_frame_write_us_, 0, 'f', 2)
+                   .arg(avg_write_us, 0, 'f', 2)
                    .arg(pub_status.current_count)
                    .arg(failed)
                    .arg(mbps, 0, 'f', 2);
     } else {
         qInfo().noquote()
-            << QString("[Publisher] FPS: %1 | write(): %2 µs/frame | writeFail: %3 | ~%4 MB/s")
+            << QString("[Publisher] FPS: %1 | write(): %2 µs/frame (avg) | writeFail: %3 | ~%4 MB/s")
                    .arg(sent)
-                   .arg(last_frame_write_us_, 0, 'f', 2)
+                   .arg(avg_write_us, 0, 'f', 2)
                    .arg(failed)
                    .arg(mbps, 0, 'f', 2);
     }

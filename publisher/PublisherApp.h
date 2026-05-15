@@ -58,6 +58,7 @@ private:
     std::atomic<uint64_t> frame_id_{0};
     std::atomic<uint64_t> frames_sent_{0};   
     std::atomic<uint64_t> write_failures_{0};
+    std::atomic<uint64_t> total_write_time_us_{0};   // Tích lũy thời gian write mỗi frame
     double                last_frame_write_us_{0.0}; 
 
     // Constants 
