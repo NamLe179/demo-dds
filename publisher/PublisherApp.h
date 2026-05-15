@@ -84,6 +84,8 @@ private:
     std::atomic<uint64_t> write_failures_{0};
     std::atomic<uint64_t> possible_queue_events_{0};
     double                last_write_us_{0.0};
+    std::atomic<uint64_t> total_write_ns_{0};     // tích lũy cho trung bình
+    std::atomic<uint64_t> write_count_{0};        // số lần write thành công
 
     static constexpr int    NUM_OBJECTS   = 2000;
     static constexpr int    PUBLISH_HZ    = 30;

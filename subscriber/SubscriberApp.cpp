@@ -184,7 +184,8 @@ void SubscriberApp::processFrame(
 {
     // Latency
     const int64_t latency_us = (recv_ns - batch.timestamp_ns()) / 1000;
-    stats.last_latency_us.store(latency_us, std::memory_order_relaxed);
+    total_latency_us_.fetch_add(static_cast<uint64_t>(latency_us), std::memory_order_relaxed);
+    latency_sample_count_.fetch_add(1, std::memory_order_relaxed);
     if (latency_us > stats.max_latency_us.load(std::memory_order_relaxed))
         stats.max_latency_us.store(latency_us, std::memory_order_relaxed);
 
@@ -232,44 +233,38 @@ void SubscriberApp::processFrame(
 void SubscriberApp::onStatsTimer()
 {
     const uint64_t frames   = stats.frames_received.exchange(0);
-    const uint64_t dropped  = stats.frames_dropped.exchange(0);
-    const uint64_t drop_evt = stats.drop_events.exchange(0);
+    const uint64_t dropped  = stats.frames_dropped.exchange(0);  // Số frame bị drop do gap
+    const uint64_t drop_evt = stats.drop_events.exchange(0);     // Số lần detect drop event
     const uint64_t rejected = stats.samples_rejected.exchange(0);
     const uint64_t objs     = stats.objects_processed.exchange(0);
-    const int64_t  lat      = stats.last_latency_us.load();
     const int64_t  maxlat   = stats.max_latency_us.load();
-    const uint64_t overwrite_est = dropped + rejected;
-
-    // Queue stats (đồng bộ timing)
-    const uint64_t cb      = stats.cb_count.exchange(0);
-    const uint64_t valid   = stats.valid_count.exchange(0);
-    const uint64_t nodata  = stats.no_data_count.exchange(0);
-    const uint64_t invalid = stats.invalid_count.exchange(0);
-    const uint64_t errors  = stats.error_count.exchange(0);
+    
+    // Tính trung bình latency trong 1 giây
+    const uint64_t total_lat = total_latency_us_.exchange(0);
+    const uint64_t lat_count = latency_sample_count_.exchange(0);
+    double avg_latency_us = (lat_count > 0) ? (double)total_lat / lat_count : 0.0;
+    
+    // Queue stats - clear để không tích lũy
+    stats.cb_count.exchange(0);
+    stats.valid_count.exchange(0);
+    stats.no_data_count.exchange(0);
+    stats.invalid_count.exchange(0);
+    stats.error_count.exchange(0);
+    stats.samples_rejected.exchange(0);
 
     qInfo().noquote()
-        << QString("[Subscriber] FPS: %1 | Processed: %2 | OverwriteEst: %3 "
-                   "(Gap:%4 + Rejected:%5) | DropEvt: %6 | Objects/s: %7 "
-                   "| Latency: %8µs | MaxLat: %9µs | ~%10 MB/s")
+        << QString("[Subscriber] FPS: %1 | Processed: %2 | FrameDrop: %3 (detected %4 times) | Rejected: %5 | Objects/s: %6 "
+                   "| Latency_avg: %7µs | Latency_max: %8µs | ~%9 MB/s")
                .arg(frames)
                .arg(frames)
-               .arg(overwrite_est)
-               .arg(dropped)
-               .arg(rejected)
-               .arg(drop_evt)
+               .arg(dropped)      // Tổng số frame bị drop
+               .arg(drop_evt)     // Số lần phát hiện drop event
+               .arg(rejected)     // Số sample bị reject từ DDS
                .arg(objs)
-               .arg(lat)
+               .arg(avg_latency_us, 0, 'f', 2)
                .arg(maxlat)
                .arg(frames * NUM_OBJECTS * sizeof(ObjectStateMsg::ObjectState)
                         / 1024.0 / 1024.0, 0, 'f', 2);
-
-    qInfo().noquote()
-        << QString("[Subscriber][Queue] cb=%1 valid=%2 no_data=%3 invalid=%4 errors=%5")
-               .arg(cb)
-               .arg(valid)
-               .arg(nodata)
-               .arg(invalid)
-               .arg(errors);
 }
 
 int64_t SubscriberApp::nowNs()

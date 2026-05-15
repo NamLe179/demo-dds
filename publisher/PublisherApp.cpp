@@ -229,10 +229,12 @@ void PublisherApp::onTimerTick()
     const ReturnCode_t rc = writer_->write(&batch_);
     const auto t1 = perf_clock_.nsecsElapsed();
 
-    last_write_us_ = (t1 - t0) / 1000.0;
+    const uint64_t write_ns = t1 - t0;
+    total_write_ns_.fetch_add(write_ns, std::memory_order_relaxed);
 
     if (rc == RETCODE_OK) {
         frames_sent_.fetch_add(1, std::memory_order_relaxed);
+        write_count_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -282,11 +284,16 @@ void PublisherApp::onStatsTimer()
     const int matched = writer_listener_.matched.load();
     const uint64_t failed = write_failures_.exchange(0, std::memory_order_relaxed);
     const uint64_t queue_events = possible_queue_events_.exchange(0, std::memory_order_relaxed);
+    const uint64_t total_ns = total_write_ns_.exchange(0, std::memory_order_relaxed);
+    const uint64_t count = write_count_.exchange(0, std::memory_order_relaxed);
+    
+    // Tính trung bình write time trong 1 giây
+    double avg_write_us = (count > 0) ? (total_ns / 1000.0) / count : 0.0;
 
     qInfo().noquote()
-        << QString("[Publisher] FPS: %1 | write(): %2 µs | Subs: %3 | writeFail: %4 | queueEvt: %5 | ~%6 MB/s")
+        << QString("[Publisher] FPS: %1 | write_avg: %2 µs | Subs: %3 | writeFail: %4 | queueEvt: %5 | ~%6 MB/s")
                .arg(sent)
-               .arg(last_write_us_, 0, 'f', 2)
+               .arg(avg_write_us, 0, 'f', 2)
                .arg(matched)
                .arg(failed)
                .arg(queue_events)

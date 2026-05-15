@@ -101,6 +101,8 @@ private:
     ReaderListener listener_;
     QTimer*        stats_timer_{nullptr};
     std::atomic<int64_t> last_gap_log_ns_{0};
+    std::atomic<uint64_t> total_latency_us_{0};      // tích lũy latency cho trung bình
+    std::atomic<uint64_t> latency_sample_count_{0};  // số sample trong 1 giây
 
     static constexpr int    NUM_OBJECTS   = 2000;
     static constexpr size_t SHM_SEG_BYTES = 64ULL * 1024 * 1024;
