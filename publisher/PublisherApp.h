@@ -66,6 +66,6 @@ private:
     static constexpr int PUBLISH_HZ  = 30;
     static constexpr int PUBLISH_MS  = 1000 / PUBLISH_HZ; // 33 ms
 
-    static constexpr int BATCH_MAX_BYTES   = 128 * 1024;   // 128 KB
+    static constexpr int BATCH_MAX_BYTES   = 60 * 1024;   // 128 KB -> 60 KB test cho docker window
     static constexpr int BATCH_MAX_SAMPLES = NUM_OBJECTS;   // flush on count first
 };

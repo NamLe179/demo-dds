@@ -175,9 +175,9 @@ bool SubscriberApp::setupReader()
     rqos.history.kind  = DDS_KEEP_LAST_HISTORY_QOS;
     rqos.history.depth = 1;
 
-    rqos.resource_limits.max_samples              = NUM_OBJECTS; //cho phép tồn tại đồng thời 2000 instances
+    rqos.resource_limits.max_samples              = NUM_OBJECTS * 10; //cmở rộng buffer test docker window
     rqos.resource_limits.max_instances            = NUM_OBJECTS;
-    rqos.resource_limits.max_samples_per_instance = 1;
+    rqos.resource_limits.max_samples_per_instance = 10;
 
     // Deadline 33ms x 3
     rqos.deadline.period.sec     = 0;

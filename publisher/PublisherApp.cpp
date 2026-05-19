@@ -142,13 +142,13 @@ bool PublisherApp::setupWriter()
     // Resource limits — khớp với history depth
     // object_id là @key cần 2000 instances. Writer chỉ giữ KEEP_LAST(1) mỗi instance
     // max_samples = max_instances × max_samples_per_instance = 2000 × 1.
-    wqos.resource_limits.max_samples              = NUM_OBJECTS;
+    wqos.resource_limits.max_samples              = NUM_OBJECTS * 10; // x10 test docker window
     wqos.resource_limits.max_instances            = NUM_OBJECTS;
-    wqos.resource_limits.max_samples_per_instance = 1;
+    wqos.resource_limits.max_samples_per_instance = 10;
 
     // BATCH QoS
     wqos.batch.enable         = DDS_BOOLEAN_TRUE;
-    wqos.batch.max_data_bytes = BATCH_MAX_BYTES;        // 128 KB 
+    wqos.batch.max_data_bytes = BATCH_MAX_BYTES;        // 128 KB -> 60 KB test cho docker window
     wqos.batch.max_samples    = BATCH_MAX_SAMPLES;      // 2000 samples 
     wqos.batch.max_flush_delay.sec     = 0;
     wqos.batch.max_flush_delay.nanosec = 35 * 1000000u; // 35 ms
