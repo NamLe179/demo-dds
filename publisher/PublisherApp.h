@@ -59,13 +59,13 @@ private:
     std::atomic<uint64_t> frames_sent_{0};   
     std::atomic<uint64_t> write_failures_{0};
     std::atomic<uint64_t> total_write_time_us_{0};   // Tích lũy thời gian write mỗi frame
-    double                last_frame_write_us_{0.0}; 
+    double last_frame_write_us_{0.0};
 
     // Constants 
     static constexpr int NUM_OBJECTS = 2000;
     static constexpr int PUBLISH_HZ  = 30;
     static constexpr int PUBLISH_MS  = 1000 / PUBLISH_HZ; // 33 ms
 
-    static constexpr int BATCH_MAX_BYTES   = 60 * 1024;   // 128 KB -> 60 KB test cho docker window
+    static constexpr int BATCH_MAX_BYTES   = 128 * 1024;   // 128 KB -> 60 KB test cho docker window
     static constexpr int BATCH_MAX_SAMPLES = NUM_OBJECTS;   // flush on count first
 };

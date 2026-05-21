@@ -177,7 +177,7 @@ bool SubscriberApp::setupReader()
 
     rqos.resource_limits.max_samples              = NUM_OBJECTS * 10; //cmở rộng buffer test docker window
     rqos.resource_limits.max_instances            = NUM_OBJECTS;
-    rqos.resource_limits.max_samples_per_instance = 10;
+    rqos.resource_limits.max_samples_per_instance = 2000;
 
     // Deadline 33ms x 3
     rqos.deadline.period.sec     = 0;
@@ -246,6 +246,14 @@ void SubscriberApp::processDataAvailable(DDSDataReader* base_reader)
     stats.take_count.fetch_add(1, std::memory_order_relaxed);
 
     const int n = data_seq.length();
+
+    // // debug số lượng batch nhận được
+    // static int batch_num = 0;
+    // batch_num++;
+
+    // qInfo() << "[Subscriber] Batch #" << batch_num
+    //         << "nhận được" << n << "samples";
+
     stats.samples_received.fetch_add(
         static_cast<uint64_t>(n), std::memory_order_relaxed);
 

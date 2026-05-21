@@ -144,7 +144,7 @@ bool PublisherApp::setupWriter()
     // max_samples = max_instances × max_samples_per_instance = 2000 × 1.
     wqos.resource_limits.max_samples              = NUM_OBJECTS * 10; // x10 test docker window
     wqos.resource_limits.max_instances            = NUM_OBJECTS;
-    wqos.resource_limits.max_samples_per_instance = 10;
+    wqos.resource_limits.max_samples_per_instance = 2000;
 
     // BATCH QoS
     wqos.batch.enable         = DDS_BOOLEAN_TRUE;
@@ -230,14 +230,8 @@ void PublisherApp::onTimerTick()
 {
     const qint64  now_ns  = nowNs();
     frame_id_.fetch_add(1, std::memory_order_relaxed);
-
-    const auto t0 = perf_clock_.nsecsElapsed();
     // Cập nhật vị trí tất cả objects
     simulateObjects(now_ns);
-
-    const auto t1 = perf_clock_.nsecsElapsed();
-    last_frame_write_us_ = (t1 - t0) / 1000.0;
-    total_write_time_us_.fetch_add(static_cast<uint64_t>(last_frame_write_us_), std::memory_order_relaxed);
 
     frames_sent_.fetch_add(1, std::memory_order_relaxed);
 }
@@ -247,6 +241,7 @@ void PublisherApp::simulateObjects(qint64 now_ns)
 {
     const float   t   = static_cast<float>(now_ns) * 1e-9f;
     const uint64_t fid = frame_id_.load(std::memory_order_relaxed);
+    double total_writes = 0;
 
     for (int i = 0; i < NUM_OBJECTS; ++i) {
         const float phase  = static_cast<float>(i) * 0.1f;
@@ -268,11 +263,17 @@ void PublisherApp::simulateObjects(qint64 now_ns)
 
         // write() ngay sau khi cập nhật object i — không đợi hết vòng lặp
         // Connext sẽ copy data vào batch buffer nội bộ.
+        const auto t_before = perf_clock_.nsecsElapsed();
         const DDS_ReturnCode_t rc = writer_->write(sample_, DDS_HANDLE_NIL);
+        const auto t_after = perf_clock_.nsecsElapsed();
+
+        total_writes += (t_after - t_before)/1000.0;
+
         if (rc != DDS_RETCODE_OK) {
             write_failures_.fetch_add(1, std::memory_order_relaxed);
         }
     }
+    total_write_time_us_.fetch_add(static_cast<uint64_t>(total_writes), std::memory_order_relaxed);
 }
 
 void PublisherApp::onStatsTimer()
